@@ -1,0 +1,9 @@
+Soccer Tactics Agent application code is MIT licensed.
+
+Metrica Sports sample data is not distributed with this repository. If you
+download and use it publicly, acknowledge Metrica Sports as the data source:
+https://github.com/metrica-sports/sample-data
+
+Pitch-control and EPV methods are informed by the MIT-licensed Friends of
+Tracking LaurieOnTracking project by Laurie Shaw:
+https://github.com/Friends-of-Tracking-Data-FoTD/LaurieOnTracking

@@ -250,3 +250,18 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+### Soccer Tactics Agent
+.ruff_cache/
+.soccer-tactics/
+data/raw/
+data/processed/
+data/reports/
+frontend/node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
+
+raw/
+processed/
+reports/
+data/
