@@ -1,4 +1,4 @@
-import type { ChallengeAnswer, EvidenceBundle, Match, Report, StageEvent, SyncStageEvent, TeamSide } from './types'
+import type { ChallengeAnswer, EvidenceBundle, Match, MatchSyncStageEvent, Report, SkillCornerCatalogMatch, StageEvent, SyncStageEvent, TeamSide } from './types'
 
 async function checked(response: Response): Promise<Response> {
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail ?? response.statusText)
@@ -36,6 +36,35 @@ export async function syncMatches(onEvent: (event: SyncStageEvent) => void): Pro
 
 export async function listReports(): Promise<Report[]> {
   return (await checked(await fetch('/api/reports'))).json()
+}
+
+export async function skillCornerCatalog(): Promise<SkillCornerCatalogMatch[]> {
+  return (await checked(await fetch('/api/data/skillcorner/catalog'))).json()
+}
+
+export async function syncSkillCorner(matchId: number, onEvent: (event: MatchSyncStageEvent) => void): Promise<Match> {
+  const response = await checked(await fetch(`/api/data/skillcorner/sync/stream?match_id=${matchId}`, { method: 'POST' }))
+  if (!response.body) throw new Error('Streaming is not available in this browser')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let match: Match | undefined
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      const event: MatchSyncStageEvent = JSON.parse(line)
+      onEvent(event)
+      if (event.error) throw new Error(event.error)
+      if (event.match) match = event.match
+    }
+    if (done) break
+  }
+  if (!match) throw new Error('SkillCorner synchronization ended without a match')
+  return match
 }
 
 export async function streamAnalysis(match_id: string, team: TeamSide, onEvent: (event: StageEvent) => void): Promise<void> {

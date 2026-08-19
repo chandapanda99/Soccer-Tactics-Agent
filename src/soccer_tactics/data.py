@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import logging
 import shutil
 import zipfile
@@ -16,7 +17,7 @@ import httpx
 from kloppy import metrica
 
 from soccer_tactics.config import Settings, get_settings
-from soccer_tactics.models import Event, Match, PlayerPosition, Point, Possession, TeamSide, TrackingFrame
+from soccer_tactics.models import Event, IngestionConfiguration, Match, PlayerPosition, Point, Possession, TeamSide, TrackingFrame
 from soccer_tactics.storage import LocalStore
 
 logger = logging.getLogger("soccer_tactics.data")
@@ -85,6 +86,13 @@ def _player_id(player: Any) -> str:
     return str(getattr(player, "player_id", None) or getattr(player, "jersey_no", None) or getattr(player, "name", player))
 
 
+def _optional_player_id(player: Any) -> str | None:
+    if player is None:
+        return None
+    identifier = _player_id(player).strip()
+    return identifier if identifier and identifier.lower() != "none" else None
+
+
 def normalize_tracking(match_id: str, dataset: Any) -> list[TrackingFrame]:
     """Convert a Kloppy TrackingDataset to the stable public frame model."""
     normalized: list[TrackingFrame] = []
@@ -134,6 +142,21 @@ def normalize_tracking(match_id: str, dataset: Any) -> list[TrackingFrame]:
     return normalized
 
 
+def downsample_tracking(frames: list[TrackingFrame], sample_rate_hz: float) -> list[TrackingFrame]:
+    """Select a stable time-based analytical cache while preserving original frame IDs."""
+    if sample_rate_hz <= 0 or sample_rate_hz > 25:
+        raise ValueError("tracking sample rate must be greater than 0 and no more than 25 Hz")
+    minimum_interval = 1.0 / sample_rate_hz
+    selected: list[TrackingFrame] = []
+    last_timestamp: dict[int, float] = {}
+    for frame in frames:
+        previous = last_timestamp.get(frame.period)
+        if previous is None or frame.timestamp - previous >= minimum_interval - 1e-6:
+            selected.append(frame)
+            last_timestamp[frame.period] = frame.timestamp
+    return selected
+
+
 def _csv_point(row: dict[str, str], prefix: str) -> Point | None:
     try:
         x = float(row[f"{prefix} X"])
@@ -153,6 +176,8 @@ def normalize_csv_events(match_id: str, path: Path) -> list[Event]:
             period = int(float(row.get("Period") or 1))
             start_frame = int(float(row.get("Start Frame") or index))
             start_time = float(row.get("Start Time [s]") or start_frame / 25)
+            end_frame_text = row.get("End Frame")
+            end_time_text = row.get("End Time [s]")
             event_type = str(row.get("Type") or "UNKNOWN").strip().upper()
             subtype = str(row.get("Subtype") or "").strip() or None
             outcome = "complete" if not subtype or "INCOMPLETE" not in subtype.upper() else "incomplete"
@@ -165,11 +190,16 @@ def normalize_csv_events(match_id: str, path: Path) -> list[Event]:
                     frame_id=start_frame,
                     team=_side(team_text),
                     player_id=str(row.get("From") or "").strip() or None,
+                    receiver_id=str(row.get("To") or "").strip() or None,
                     event_type=event_type,
                     subtype=subtype,
                     start=_csv_point(row, "Start"),
                     end=_csv_point(row, "End"),
+                    end_frame_id=int(float(end_frame_text)) if end_frame_text else None,
+                    end_timestamp=float(end_time_text) if end_time_text else None,
                     outcome=outcome,
+                    outcome_is_inferred=True,
+                    source_attributes_json=json.dumps(row, sort_keys=True),
                 )
             )
     return events
@@ -180,6 +210,13 @@ def normalize_kloppy_events(match_id: str, dataset: Any) -> list[Event]:
     for index, item in enumerate(dataset.events):
         event_type = str(getattr(getattr(item, "event_type", None), "value", getattr(item, "event_type", "UNKNOWN"))).upper()
         result = getattr(item, "result", None)
+        end_timestamp = getattr(item, "end_timestamp", None)
+        source_attributes = {
+            "event_type": getattr(item, "event_type", None),
+            "event_name": getattr(item, "event_name", None),
+            "result": result,
+            "raw_event": getattr(item, "raw_event", None),
+        }
         events.append(
             Event(
                 event_id=str(getattr(item, "event_id", None) or f"{match_id}-e{index:05d}"),
@@ -188,12 +225,16 @@ def normalize_kloppy_events(match_id: str, dataset: Any) -> list[Event]:
                 timestamp=max(0.0, _seconds(getattr(item, "timestamp", 0))),
                 frame_id=getattr(item, "frame_id", None),
                 team=_side(getattr(item, "team", "Away")),
-                player_id=_player_id(getattr(item, "player", "")) or None,
+                player_id=_optional_player_id(getattr(item, "player", None)),
+                receiver_id=_optional_player_id(getattr(item, "receiver_player", None)),
                 event_type=event_type,
                 subtype=str(getattr(item, "event_name", "")).strip() or None,
                 start=_point(getattr(item, "coordinates", None)),
                 end=_point(getattr(item, "receiver_coordinates", None)),
+                end_frame_id=getattr(item, "end_frame_id", None),
+                end_timestamp=max(0.0, _seconds(end_timestamp)) if end_timestamp is not None else None,
                 outcome=str(getattr(result, "value", result)) if result is not None else None,
+                source_attributes_json=json.dumps(source_attributes, default=str, sort_keys=True),
             )
         )
     return events
@@ -287,7 +328,7 @@ class MetricaDataService:
             return {"home": find("tracking", "home"), "away": find("tracking", "away"), "events": find("events")}
         return {"metadata": find("metadata"), "tracking": find("tracking"), "events": find("events")}
 
-    def ingest_game(self, game: int, sample_rate_hz: float = 5.0) -> Match:
+    def ingest_game(self, game: int, sample_rate_hz: float = 5.0, retain_full_tracking: bool = False) -> Match:
         paths = self._paths(game)
         match_id = f"sample-game-{game}"
         sample_fraction = min(1.0, sample_rate_hz / 25.0)
@@ -305,6 +346,19 @@ class MetricaDataService:
             events = normalize_kloppy_events(match_id, event_dataset)
             source_format = "fifa_epts"
         frames = normalize_tracking(match_id, tracking)
+        full_frames: list[TrackingFrame] | None = None
+        if retain_full_tracking and sample_fraction < 1.0:
+            if game in (1, 2):
+                full_tracking = metrica.load_tracking_csv(
+                    home_data=paths["home"], away_data=paths["away"], sample_rate=1.0, coordinates="kloppy"
+                )
+            else:
+                full_tracking = metrica.load_tracking_epts(
+                    meta_data=paths["metadata"], raw_data=paths["tracking"], sample_rate=1.0, coordinates="kloppy"
+                )
+            full_frames = normalize_tracking(match_id, full_tracking)
+        elif retain_full_tracking:
+            full_frames = frames
         possessions = segment_possessions(match_id, events, frames)
         checksum = _checksum_files(paths.values())
         match = Match(
@@ -313,14 +367,24 @@ class MetricaDataService:
             format=source_format,
             tracking_fps=sample_rate_hz,
             source_checksum=checksum,
+            ingestion=IngestionConfiguration(
+                analysis_tracking_sample_rate_hz=sample_rate_hz,
+                full_tracking_parquet_cached=retain_full_tracking,
+            ),
         )
-        self.store.save_match(match, events, possessions, frames)
+        self.store.save_match(match, events, possessions, frames, full_frames=full_frames)
         return match
 
-    def sync(self, force: bool = False, games: Iterable[int] = (1, 2, 3)) -> list[Match]:
+    def sync(
+        self,
+        force: bool = False,
+        games: Iterable[int] = (1, 2, 3),
+        sample_rate_hz: float = 5.0,
+        retain_full_tracking: bool = False,
+    ) -> list[Match]:
         self.sync_raw(force=force)
         matches = []
         for game in games:
             logger.info("ingesting Metrica sample game %s", game)
-            matches.append(self.ingest_game(game))
+            matches.append(self.ingest_game(game, sample_rate_hz=sample_rate_hz, retain_full_tracking=retain_full_tracking))
         return matches

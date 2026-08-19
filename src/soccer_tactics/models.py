@@ -10,11 +10,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
+INGESTION_VERSION = "1.1"
 ANALYTICS_VERSION = "1.0"
 REPORT_VERSION = "1.0"
 METRICA_SOURCE_URL = "https://github.com/metrica-sports/sample-data"
 METRICA_ATTRIBUTION = "Tracking and event data provided by Metrica Sports sample data."
+SKILLCORNER_SOURCE_URL = "https://github.com/SkillCorner/opendata"
+SKILLCORNER_ATTRIBUTION = "Broadcast tracking and dynamic event data provided by SkillCorner Open Data."
 
 
 class TeamSide(StrEnum):
@@ -44,7 +47,9 @@ class PlayerPosition(BaseModel):
     position: Point
     velocity_x: float = 0.0
     velocity_y: float = 0.0
+    velocity_is_derived: bool = True
     is_goalkeeper: bool = False
+    is_detected: bool | None = None
 
 
 class TrackingFrame(BaseModel):
@@ -54,6 +59,11 @@ class TrackingFrame(BaseModel):
     period: int = Field(ge=1, le=5)
     timestamp: float = Field(ge=0)
     ball: Point | None = None
+    ball_z: float | None = None
+    ball_is_detected: bool | None = None
+    possession_team: TeamSide | None = None
+    possession_player_id: str | None = None
+    source_attributes_json: str | None = None
     players: list[PlayerPosition]
 
 
@@ -66,11 +76,39 @@ class Event(BaseModel):
     frame_id: int | None = Field(default=None, ge=0)
     team: TeamSide
     player_id: str | None = None
+    receiver_id: str | None = None
     event_type: str
     subtype: str | None = None
     start: Point | None = None
     end: Point | None = None
+    end_frame_id: int | None = Field(default=None, ge=0)
+    end_timestamp: float | None = Field(default=None, ge=0)
     outcome: str | None = None
+    outcome_is_inferred: bool = False
+    source_attributes_json: str | None = None
+
+
+class IngestionConfiguration(BaseModel):
+    """Versioned choices used to create a processed match cache."""
+
+    model_config = ConfigDict(frozen=True)
+    version: str = INGESTION_VERSION
+    source_tracking_sample_rate_hz: float = Field(default=25.0, gt=0)
+    analysis_tracking_sample_rate_hz: float = Field(default=5.0, gt=0)
+    full_tracking_retained_in_raw: bool = True
+    full_tracking_parquet_cached: bool = False
+    source_event_attributes_retained: bool = True
+    possession_derivation_method: str = "event-team-change-v1"
+
+
+class MatchCapabilities(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    events: bool = True
+    provider_dynamic_events: bool = False
+    continuous_tracking: bool = True
+    ball_tracking: bool = True
+    identified_players: bool = False
+    provider_phases: bool = False
 
 
 class Match(BaseModel):
@@ -86,7 +124,14 @@ class Match(BaseModel):
     source_url: str = METRICA_SOURCE_URL
     source_attribution: str = METRICA_ATTRIBUTION
     source_checksum: str | None = None
-    format: Literal["metrica_csv", "fifa_epts"]
+    ingestion: IngestionConfiguration = Field(default_factory=IngestionConfiguration)
+    capabilities: MatchCapabilities = Field(default_factory=MatchCapabilities)
+    data_provider: Literal["metrica", "skillcorner"] = "metrica"
+    competition: str | None = None
+    season: str | None = None
+    match_date: str | None = None
+    data_quality_caveats: list[str] = Field(default_factory=list)
+    format: Literal["metrica_csv", "fifa_epts", "skillcorner_jsonl"]
 
 
 class Possession(BaseModel):
@@ -103,6 +148,8 @@ class Possession(BaseModel):
     start: Point | None = None
     end: Point | None = None
     outcome: str = "retained"
+    derivation_method: str = "event-team-change-v1"
+    source_attributes_json: str | None = None
 
     @model_validator(mode="after")
     def validate_window(self) -> Possession:

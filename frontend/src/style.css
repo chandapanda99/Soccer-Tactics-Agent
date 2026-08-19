@@ -106,7 +106,7 @@ a {
 
 main {
     display: grid;
-    grid-template-columns: 288px minmax(0, 1fr);
+    grid-template-columns: clamp(19rem, 22vw, 23rem) minmax(0, 1fr);
     min-height: calc(100vh - 88px);
 }
 
@@ -173,6 +173,40 @@ main {
 .primary:disabled {
     opacity: 0.48;
     box-shadow: none;
+}
+
+.secondary {
+    width: 100%;
+    margin-top: 0.65rem;
+    padding: 0.68rem 0.75rem;
+    color: var(--text-soft);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-weight: 650;
+    cursor: pointer;
+    transition: border-color 140ms ease, background 140ms ease;
+}
+
+.secondary:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--surface-hover);
+    border-color: var(--teal);
+}
+
+.secondary:disabled {
+    opacity: 0.48;
+}
+
+.data-sources label {
+    margin-top: 1rem;
+}
+
+.source-caveat {
+    margin: 0.75rem 0;
+    color: var(--muted);
+    font-size: 0.68rem;
+    line-height: 1.5;
 }
 
 .status, .muted, .method-note p {
@@ -786,7 +820,7 @@ footer {
 
 @media (max-width: 1050px) {
     main {
-        grid-template-columns: 240px minmax(0, 1fr);
+        grid-template-columns: clamp(17.5rem, 28vw, 19rem) minmax(0, 1fr);
     }
 
     .report-grid {

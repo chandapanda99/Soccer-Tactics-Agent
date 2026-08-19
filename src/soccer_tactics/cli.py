@@ -14,20 +14,37 @@ from soccer_tactics.data import MetricaDataService
 from soccer_tactics.models import TeamSide
 from soccer_tactics.observability import configure_logging
 from soccer_tactics.service import TacticsApplication
+from soccer_tactics.skillcorner import SkillCornerDataService
 from soccer_tactics.storage import LocalStore
 
 app = typer.Typer(help="Evidence-bound soccer tactics analyst", no_args_is_help=True)
-data_app = typer.Typer(help="Acquire and inspect Metrica sample data")
+data_app = typer.Typer(help="Acquire and inspect open soccer data")
+skillcorner_app = typer.Typer(help="Browse and acquire SkillCorner Open Data")
 report_app = typer.Typer(help="Export persisted tactical reports")
 app.add_typer(data_app, name="data")
+data_app.add_typer(skillcorner_app, name="skillcorner")
 app.add_typer(report_app, name="report")
 
 
 @data_app.command("sync")
-def data_sync(force: Annotated[bool, typer.Option(help="Replace the existing raw cache")] = False) -> None:
+def data_sync(
+    force: Annotated[bool, typer.Option(help="Replace the existing raw cache")] = False,
+    sample_rate_hz: Annotated[
+        float,
+        typer.Option(min=0.1, max=25.0, help="Tracking rate for the analytical Parquet cache"),
+    ] = 5.0,
+    retain_full_tracking: Annotated[
+        bool,
+        typer.Option(help="Also write a full-rate frames_full.parquet cache"),
+    ] = False,
+) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
-    matches = MetricaDataService(settings).sync(force=force)
+    matches = MetricaDataService(settings).sync(
+        force=force,
+        sample_rate_hz=sample_rate_hz,
+        retain_full_tracking=retain_full_tracking,
+    )
     for match in matches:
         typer.echo(f"{match.match_id}: {match.name} ({match.format})")
 
@@ -48,6 +65,25 @@ def data_inspect(match_id: str | None = None) -> None:
                 indent=2,
             )
         )
+
+
+@skillcorner_app.command("catalog")
+def skillcorner_catalog(refresh: Annotated[bool, typer.Option(help="Refresh the remote catalog")] = False) -> None:
+    for match in SkillCornerDataService().catalog(refresh=refresh):
+        typer.echo(f"{match.match_id}: {match.name} ({match.date_time[:10]})")
+
+
+@skillcorner_app.command("sync")
+def skillcorner_sync(
+    match_id: int,
+    sample_rate_hz: Annotated[
+        float,
+        typer.Option(min=0.1, max=10.0, help="Tracking rate for the analytical Parquet cache"),
+    ] = 5.0,
+    force: Annotated[bool, typer.Option(help="Replace locally cached source files")] = False,
+) -> None:
+    match = SkillCornerDataService().sync_match(match_id, sample_rate_hz=sample_rate_hz, force=force)
+    typer.echo(f"{match.match_id}: {match.name} ({match.format})")
 
 
 @app.command()

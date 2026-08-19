@@ -5,7 +5,8 @@ export interface Point { x: number; y: number }
 export interface PlayerPosition { team: TeamSide; player_id: string; position: Point; velocity_x: number; velocity_y: number; is_goalkeeper: boolean }
 export interface TrackingFrame { match_id: string; frame_id: number; period: number; timestamp: number; ball: Point | null; players: PlayerPosition[] }
 export interface Event { event_id: string; timestamp: number; event_type: string; subtype?: string; team: TeamSide; start?: Point; end?: Point }
-export interface Match { match_id: string; name: string; format: string; source_attribution: string }
+export interface Match { match_id: string; name: string; format: string; source_attribution: string; data_provider?: 'metrica' | 'skillcorner'; competition?: string; season?: string }
+export interface SkillCornerCatalogMatch { match_id: number; name: string; date_time: string; home_team: string; away_team: string; competition_id: number; season_id: number }
 export interface EvidenceReference { evidence_id: string; match_id: string; team: TeamSide; metric: MetricKind; possession_id: string; period: number; start_frame: number; end_frame: number; event_ids: string[]; score: number | null; supporting: boolean }
 export interface Claim { claim_id: string; section: MetricKind; statement: string; confidence: number; caveats: string[]; evidence_ids: string[] }
 export interface Section { metric: MetricKind; title: string; overview: string; claims: Claim[] }
@@ -15,3 +16,4 @@ export interface EvidenceBundle { claim: Claim; supporting: EvidenceReference[];
 export interface ChallengeAnswer { answer: string; evidence_ids: string[]; limitations: string[] }
 export interface StageEvent { stage: string; message: string; progress: number; report?: Report; error?: string; run_id?: string }
 export interface SyncStageEvent extends StageEvent { matches?: Match[] }
+export interface MatchSyncStageEvent extends StageEvent { match?: Match }

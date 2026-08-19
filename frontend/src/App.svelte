@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import Pitch from './Pitch.svelte'
-  import { challengeClaim, getEvidence, listMatches, listReports, streamAnalysis, syncMatches } from './api'
-  import type { ChallengeAnswer, Claim, EvidenceBundle, Match, Report, StageEvent, SyncStageEvent, TeamSide } from './types'
+  import { challengeClaim, getEvidence, listMatches, listReports, skillCornerCatalog, streamAnalysis, syncMatches, syncSkillCorner } from './api'
+  import type { ChallengeAnswer, Claim, EvidenceBundle, Match, MatchSyncStageEvent, Report, SkillCornerCatalogMatch, StageEvent, SyncStageEvent, TeamSide } from './types'
 
   type Operation = 'idle' | 'sync' | 'analysis' | 'evidence' | 'challenge'
   interface StatusEntry { stage: string; message: string }
@@ -19,6 +19,10 @@
   let busy = false
   let error = ''
   let syncing = false
+  let skillCornerMatches: SkillCornerCatalogMatch[] = []
+  let skillCornerMatchId = 0
+  let skillCornerCatalogOpen = false
+  let catalogLoading = false
   let evidenceLoading = false
   let challenging = false
   let question = 'Show me the possessions supporting that claim.'
@@ -94,6 +98,33 @@
     finally { syncing = false }
   }
 
+  async function openSkillCornerCatalog(): Promise<void> {
+    skillCornerCatalogOpen = !skillCornerCatalogOpen
+    if (!skillCornerCatalogOpen || skillCornerMatches.length) return
+    catalogLoading = true; error = ''
+    try {
+      skillCornerMatches = await skillCornerCatalog()
+      skillCornerMatchId = skillCornerMatches[0]?.match_id ?? 0
+    }
+    catch (reason) { error = reason instanceof Error ? reason.message : String(reason) }
+    finally { catalogLoading = false }
+  }
+
+  async function addSkillCornerMatch(): Promise<void> {
+    if (!skillCornerMatchId) return
+    syncing = true; error = ''
+    beginOperation('sync', 'Preparing the SkillCorner open-data match', 0.01)
+    try {
+      const added = await syncSkillCorner(skillCornerMatchId, (event: MatchSyncStageEvent) => updateOperation(event))
+      matches = await listMatches()
+      selectedMatch = added.match_id
+      skillCornerCatalogOpen = false
+      finishOperation(`${added.name} ready for analysis`)
+    }
+    catch (reason) { failOperation(reason) }
+    finally { syncing = false }
+  }
+
   async function analyze(): Promise<void> {
     if (!selectedMatch) return
     busy = true; error = ''; report = null; evidence = null; answer = null
@@ -138,7 +169,7 @@
 
 <header class="topbar">
   <div><p class="eyebrow">Open tracking intelligence</p><h1>Soccer Tactics Agent</h1></div>
-  <div class="source-mark">METRICA<br/><span>sample data</span></div>
+  <div class="source-mark">OPEN DATA<br/><span>Metrica + SkillCorner</span></div>
 </header>
 
 <main>
@@ -164,6 +195,22 @@
         </div>
       {:else}<p class="status">{status}</p>{/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
+    </section>
+    <section class="data-sources">
+      <p class="step">Add match data</p>
+      {#if matches.length}<button class="secondary" on:click={sync} disabled={operationActive}>Refresh Metrica samples</button>{/if}
+      <button class="secondary" on:click={openSkillCornerCatalog} disabled={operationActive || catalogLoading}>
+        {catalogLoading ? 'Loading catalog…' : skillCornerCatalogOpen ? 'Close SkillCorner catalog' : 'Add SkillCorner match'}
+      </button>
+      {#if skillCornerCatalogOpen && skillCornerMatches.length}
+        <label>SkillCorner match
+          <select bind:value={skillCornerMatchId}>
+            {#each skillCornerMatches as item}<option value={item.match_id}>{item.name} · {item.date_time.slice(0, 10)}</option>{/each}
+          </select>
+        </label>
+        <p class="source-caveat">Real 2024/25 A-League broadcast tracking. Downloads can exceed 80 MB per match.</p>
+        <button class="primary" on:click={addSkillCornerMatch} disabled={operationActive}>Download selected match</button>
+      {/if}
     </section>
     {#if reports.length}
       <section><p class="step">Saved reports</p>

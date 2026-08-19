@@ -46,12 +46,18 @@ class LocalStore:
         events: list[Event],
         possessions: list[Possession],
         frames: list[TrackingFrame],
+        full_frames: list[TrackingFrame] | None = None,
     ) -> None:
         directory = self._match_dir(match.match_id)
         (directory / "match.json").write_text(match.model_dump_json(indent=2), encoding="utf-8")
         self._write_models(directory / "events.parquet", events)
         self._write_models(directory / "possessions.parquet", possessions)
         self._write_models(directory / "frames.parquet", frames)
+        full_frames_path = directory / "frames_full.parquet"
+        if full_frames is not None:
+            self._write_models(full_frames_path, full_frames)
+        elif full_frames_path.exists():
+            full_frames_path.unlink()
 
     def list_matches(self) -> list[Match]:
         matches: list[Match] = []
@@ -73,6 +79,11 @@ class LocalStore:
 
     def frames(self, match_id: str) -> list[TrackingFrame]:
         return self._read_models(self._match_dir(match_id) / "frames.parquet", TrackingFrame)
+
+    def full_frames(self, match_id: str) -> list[TrackingFrame]:
+        """Return the optional full-rate processed cache, falling back to analytical frames."""
+        path = self._match_dir(match_id) / "frames_full.parquet"
+        return self._read_models(path, TrackingFrame) if path.exists() else self.frames(match_id)
 
     def query(self, match_id: str, sql: str) -> list[dict[str, object]]:
         """Read-only query over normalized match tables."""

@@ -11,7 +11,7 @@ from typing import Any
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 from langchain.tools import tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from soccer_tactics.config import Settings, get_settings
 from soccer_tactics.models import (
@@ -38,6 +38,28 @@ class ChallengeAnswer(BaseModel):
     answer: str = Field(min_length=1, max_length=2500)
     evidence_ids: list[str] = Field(min_length=1, max_length=8)
     limitations: list[str] = Field(default_factory=list, max_length=5)
+
+
+class MetricToolInput(BaseModel):
+    """Constrained metric argument shared by evidence tools."""
+
+    metric: MetricKind = Field(description="One of the six supported tactical metric identifiers.")
+
+    @field_validator("metric", mode="before")
+    @classmethod
+    def recover_scoped_metric(cls, value: Any) -> Any:
+        """Recover a metric accidentally appended to an agent-generated scope ID."""
+        if isinstance(value, str) and "|" in value:
+            candidate = value.rsplit("|", 1)[-1]
+            if candidate in {metric.value for metric in MetricKind}:
+                logger.warning("recovered metric from scoped tool argument: %s", value[:200])
+                return candidate
+        return value
+
+
+class RankPossessionsInput(MetricToolInput):
+    supporting: bool = True
+    limit: int = Field(default=5, ge=1, le=8)
 
 
 @dataclass(frozen=True)
@@ -72,20 +94,18 @@ def _tools(results: list[MetricResult]):
     by_metric = {result.metric: result for result in results}
     evidence = {item.evidence_id: item for result in results for item in result.evidence}
 
-    @tool
-    def get_metric_summary(metric: str) -> str:
+    @tool(args_schema=MetricToolInput)
+    def get_metric_summary(metric: MetricKind) -> str:
         """Return the complete deterministic summary and caveats for one tactical metric."""
-        kind = MetricKind(metric)
-        result = by_metric[kind]
+        result = by_metric[metric]
         return result.model_dump_json(indent=2)
 
-    @tool
-    def rank_possessions(metric: str, supporting: bool = True, limit: int = 5) -> str:
+    @tool(args_schema=RankPossessionsInput)
+    def rank_possessions(metric: MetricKind, supporting: bool = True, limit: int = 5) -> str:
         """Rank possession evidence for or against a metric-level interpretation."""
-        kind = MetricKind(metric)
-        matches = [item for item in by_metric[kind].evidence if item.supporting == supporting]
+        matches = [item for item in by_metric[metric].evidence if item.supporting == supporting]
         matches.sort(key=lambda item: item.score or 0, reverse=supporting)
-        return json.dumps([item.model_dump(mode="json") for item in matches[: max(1, min(limit, 8))]], indent=2)
+        return json.dumps([item.model_dump(mode="json") for item in matches[:limit]], indent=2)
 
     @tool
     def verify_evidence(evidence_ids: list[str]) -> str:

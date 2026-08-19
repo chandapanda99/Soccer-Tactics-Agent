@@ -146,7 +146,7 @@ def passing_network(
             if event is None or event.event_type != "PASS" or (event.outcome or "").lower() == "incomplete":
                 continue
             sender = event.player_id or "unknown"
-            receiver = (event.subtype or "").split("-")[0].strip() or "unknown"
+            receiver = event.receiver_id or (event.subtype or "").split("-")[0].strip() or "unknown"
             weight = graph.get_edge_data(sender, receiver, {}).get("weight", 0) + 1
             graph.add_edge(sender, receiver, weight=weight)
             completed += 1
@@ -176,7 +176,7 @@ def passing_network(
             "top_combinations": combinations,
         },
         evidence=references,
-        caveats=["Receiver identity is inferred from Metrica event labels when explicit receiver fields are unavailable."],
+        caveats=["Receiver identity uses the provider field when available and otherwise falls back to event labels."],
     )
 
 

@@ -46,7 +46,7 @@ def test_data_sync_stream_reports_each_game(monkeypatch, store):
     client = TestClient(api)
 
     monkeypatch.setattr(MetricaDataService, "sync_raw", lambda self, force=False: self.settings.raw_dir)
-    monkeypatch.setattr(MetricaDataService, "ingest_game", lambda self, game: store.get_match("test-match"))
+    monkeypatch.setattr(MetricaDataService, "ingest_game", lambda self, game, **kwargs: store.get_match("test-match"))
 
     with client.stream("POST", "/api/data/sync/stream") as response:
         events = [__import__("json").loads(line) for line in response.iter_lines()]
@@ -67,3 +67,14 @@ def test_challenge_conversation_is_not_persisted(store):
     answer = application.challenge(report.report_id, claim.claim_id, "Show the evidence")
     assert answer.evidence_ids
     assert not list(store.settings.reports_dir.glob("*chat*"))
+
+
+def test_full_tracking_cache_is_optional(store, sample_data):
+    events, possessions, frames = sample_data
+    match = store.get_match("test-match")
+
+    assert store.full_frames("test-match") == frames
+    store.save_match(match, events, possessions, frames[::2], full_frames=frames)
+
+    assert store.frames("test-match") == frames[::2]
+    assert store.full_frames("test-match") == frames

@@ -55,8 +55,8 @@ npm run dev
 
 Open `http://127.0.0.1:5173`. The backend listens on `http://127.0.0.1:8766`.
 
-The data sync command downloads, but never commits, Metrica Sports sample data. Public outputs acknowledge Metrica Sports automatically. Sample Game 1 and 2 use Metrica CSV;
-Sample Game 3 uses the FIFA EPTS format.
+The data sync commands download, but never commit, third-party data. Public outputs carry the matching source attribution. Sample Game 1 and 2 use Metrica CSV; Sample Game 3
+uses FIFA EPTS. SkillCorner supplies ten identified 2024/25 A-League matches with 10 Hz broadcast tracking, dynamic events, and provider phases.
 
 ## Models
 
@@ -68,10 +68,32 @@ for a local provider. Model credentials never reach the browser.
 
 ```powershell
 uv run soccer-tactics data sync
+uv run soccer-tactics data skillcorner catalog
+uv run soccer-tactics data skillcorner sync 1886347
 uv run soccer-tactics data inspect
 uv run soccer-tactics analyze sample-game-2 Home
 uv run soccer-tactics report export <report-id> --format html
 uv run soccer-tactics serve
+```
+
+Raw Metrica files remain at their original 25 Hz. The default processed analytical cache is 5 Hz; choose another rate or
+optionally create a second full-rate Parquet cache when an experiment needs every frame:
+
+```powershell
+uv run soccer-tactics data sync --sample-rate-hz 10
+uv run soccer-tactics data sync --retain-full-tracking
+```
+
+Processed match metadata records the ingestion version, analytical sample rate, full-rate cache choice, source checksum,
+and possession derivation method. Normalized events retain receiver/end timing fields and a JSON copy of source attributes.
+
+SkillCorner matches are downloaded selectively because each tracking file can exceed 80 MB. The application preserves the
+provider's attribution and records caveats about broadcast extrapolation and the published player-identity accuracy. For example:
+
+```powershell
+uv run soccer-tactics data skillcorner catalog
+uv run soccer-tactics data skillcorner sync 1886347 --sample-rate-hz 5
+uv run soccer-tactics analyze skillcorner-1886347 Home
 ```
 
 ## Verification
@@ -87,5 +109,6 @@ npm run build
 
 ## Methodological limits
 
-The three anonymized sample matches are a demonstration corpus, not a population-level validation set. Pressure events are tracking-derived proxies, pitch control depends on
-reaction and speed assumptions, and control-weighted EPV is a transparent analytical baseline rather than a learned outcome model. Reports expose the active parameter set.
+The three anonymized Metrica matches and ten SkillCorner matches are demonstration corpora, not population-level validation sets. SkillCorner tracking is inferred from broadcast
+video and contains extrapolated positions; the provider reports approximately 97% player-identity accuracy. Pressure events are tracking-derived proxies, pitch control depends
+on reaction and speed assumptions, and control-weighted EPV is a transparent analytical baseline rather than a learned outcome model. Reports expose the active parameter set.

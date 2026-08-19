@@ -39,7 +39,7 @@ class TacticsApplication:
     ) -> Iterator[StageEvent]:
         config = configuration or AnalysisConfiguration()
         run = run_id or str(uuid.uuid4())
-        self.store.get_match(match_id)
+        match = self.store.get_match(match_id)
         yield StageEvent(stage="load", message="Loading synchronized events, possessions, and tracking frames", progress=0.02)
         events = self.store.events(match_id)
         possessions = self.store.possessions(match_id)
@@ -70,6 +70,13 @@ class TacticsApplication:
             progress=0.76,
         )
         report = self.harness.generate_report(match_id, team, config, results)
+        report = report.model_copy(
+            update={
+                "source_url": match.source_url,
+                "attribution": match.source_attribution,
+                "methodological_caveats": list(dict.fromkeys([*report.methodological_caveats, *match.data_quality_caveats])),
+            }
+        )
         self.store.save_report(report)
         logger.info(
             "analysis completed",

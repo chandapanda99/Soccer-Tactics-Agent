@@ -13,12 +13,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from soccer_tactics.agents import ChallengeAnswer
+from soccer_tactics.agents import ChallengeAnswer, EvidenceBoundHarness
 from soccer_tactics.config import Settings, get_settings
 from soccer_tactics.data import MetricaDataService
 from soccer_tactics.models import AnalysisConfiguration, EvidenceBundle, Match, TacticalReport, TeamSide, TrackingFrame
 from soccer_tactics.providers import provider_choices
 from soccer_tactics.service import TacticsApplication
+from soccer_tactics.skillcorner import SkillCornerCatalogMatch, SkillCornerDataService
 from soccer_tactics.storage import LocalStore
 
 
@@ -47,7 +48,7 @@ def create_api(
 ) -> FastAPI:
     current = settings or get_settings()
     local_store = store or LocalStore(current)
-    service = TacticsApplication(local_store)
+    service = TacticsApplication(local_store, EvidenceBoundHarness(current))
     api = FastAPI(title="Soccer Tactics Agent API", version="1.0.0")
     api.state.tactics = service
     api.add_middleware(
@@ -78,14 +79,26 @@ def create_api(
         return local_store.list_matches()
 
     @api.post("/api/data/sync", response_model=list[Match])
-    def sync_data(force: bool = Query(default=False)) -> list[Match]:
+    def sync_data(
+        force: bool = Query(default=False),
+        sample_rate_hz: float = Query(default=5.0, gt=0, le=25),
+        retain_full_tracking: bool = Query(default=False),
+    ) -> list[Match]:
         try:
-            return MetricaDataService(current, local_store).sync(force=force)
+            return MetricaDataService(current, local_store).sync(
+                force=force,
+                sample_rate_hz=sample_rate_hz,
+                retain_full_tracking=retain_full_tracking,
+            )
         except Exception as error:
             raise HTTPException(status_code=502, detail=f"Metrica sync failed: {error}") from error
 
     @api.post("/api/data/sync/stream")
-    def stream_sync_data(force: bool = Query(default=False)) -> StreamingResponse:
+    def stream_sync_data(
+        force: bool = Query(default=False),
+        sample_rate_hz: float = Query(default=5.0, gt=0, le=25),
+        retain_full_tracking: bool = Query(default=False),
+    ) -> StreamingResponse:
         def stream():
             data_service = MetricaDataService(current, local_store)
             try:
@@ -123,7 +136,13 @@ def create_api(
                         )
                         + "\n"
                     )
-                    matches.append(data_service.ingest_game(game))
+                    matches.append(
+                        data_service.ingest_game(
+                            game,
+                            sample_rate_hz=sample_rate_hz,
+                            retain_full_tracking=retain_full_tracking,
+                        )
+                    )
                     yield (
                         json.dumps(
                             {
@@ -147,6 +166,73 @@ def create_api(
                 )
             except Exception as error:
                 yield json.dumps({"stage": "error", "message": "Metrica sync failed", "progress": 1.0, "error": str(error)}) + "\n"
+
+        return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+    @api.get("/api/data/skillcorner/catalog", response_model=list[SkillCornerCatalogMatch])
+    def skillcorner_catalog(refresh: bool = Query(default=False)) -> list[SkillCornerCatalogMatch]:
+        try:
+            return SkillCornerDataService(current, local_store).catalog(refresh=refresh)
+        except Exception as error:
+            raise HTTPException(status_code=502, detail=f"SkillCorner catalog failed: {error}") from error
+
+    @api.post("/api/data/skillcorner/sync/stream")
+    def stream_skillcorner_sync(
+        match_id: int = Query(gt=0),
+        sample_rate_hz: float = Query(default=5.0, gt=0, le=10),
+        force: bool = Query(default=False),
+    ) -> StreamingResponse:
+        def stream():
+            data_service = SkillCornerDataService(current, local_store)
+            try:
+                yield (
+                    json.dumps(
+                        {
+                            "stage": "catalog",
+                            "message": "Validating the selected SkillCorner match",
+                            "progress": 0.03,
+                        }
+                    )
+                    + "\n"
+                )
+                known = {item.match_id for item in data_service.catalog()}
+                if match_id not in known:
+                    raise KeyError(f"SkillCorner open-data match not found: {match_id}")
+                yield (
+                    json.dumps(
+                        {
+                            "stage": "download",
+                            "message": "Downloading tracking, match, dynamic-event, and phase files",
+                            "progress": 0.08,
+                        }
+                    )
+                    + "\n"
+                )
+                paths = data_service.sync_raw_match(match_id, force=force)
+                yield (
+                    json.dumps(
+                        {
+                            "stage": "normalize",
+                            "message": "Normalizing 10 Hz broadcast tracking and provider phases",
+                            "progress": 0.62,
+                        }
+                    )
+                    + "\n"
+                )
+                match = data_service.ingest_match(match_id, paths, sample_rate_hz=sample_rate_hz)
+                yield (
+                    json.dumps(
+                        {
+                            "stage": "complete",
+                            "message": f"{match.name} is ready",
+                            "progress": 1.0,
+                            "match": match.model_dump(mode="json"),
+                        }
+                    )
+                    + "\n"
+                )
+            except Exception as error:
+                yield json.dumps({"stage": "error", "message": "SkillCorner sync failed", "progress": 1.0, "error": str(error)}) + "\n"
 
         return StreamingResponse(stream(), media_type="application/x-ndjson")
 
